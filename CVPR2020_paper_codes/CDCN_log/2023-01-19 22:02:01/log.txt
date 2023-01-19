@@ -1,5 +1,0 @@
-Oulu-NPU start train & test at 2023-01-19 22:02:01
-train from scratch!
-
-epoch:1, batch:1, Absolute_Depth_loss= 139.6397, Contrastive_Depth_loss= 122.2392
-

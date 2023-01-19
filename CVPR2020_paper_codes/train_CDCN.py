@@ -43,7 +43,7 @@ import torch.optim as optim
 import copy
 import pdb
 from torchvision.utils import make_grid
-from utils import AvgrageMeter, accuracy, performances, plot_save_heatmap, cal_heatmap, tensorboard_add_image_sample, feature_2_heat_map
+from utils import AvgrageMeter, accuracy, performances, plot_save_jpg, cal_heatmap, tensorboard_add_image_sample, feature_2_heat_map
 from loss import contrast_depth_loss
 
 
@@ -108,9 +108,6 @@ def train_test():
 
     loss_factor = 1000
     for epoch in range(args.epochs):  # loop over the dataset multiple times
-        scheduler.step()
-        if (epoch + 1) % args.step_size == 0:
-            lr *= args.gamma
         loss_absolute, loss_contra = AvgrageMeter(), AvgrageMeter()
 
         model.train()
@@ -134,8 +131,9 @@ def train_test():
             loss_contra.update(contrastive_loss.data, n)
             
             if (i + 1) % echo_batches == 0:
-                display(log_file, 'epoch:%d, batch:%d, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f\n' % (epoch + 1, i + 1, loss_absolute.avg, loss_contra.avg))
-                feature_2_heat_map(x_input, x_Block1, x_Block2, x_Block3, map_x, epoch, i)
+                feature_2_heat_map(log_dir, x_input, x_Block1, x_Block2, x_Block3, map_x, epoch, i)
+        scheduler.step()
+        
         writer.add_scalar('data/absolute_loss', loss_absolute.avg, epoch)
         writer.add_scalar('data/contrastive_loss', loss_contra.avg, epoch)
         writer.add_scalar('data/total_loss', loss_absolute.avg + loss_contra.avg , epoch)
@@ -165,7 +163,7 @@ def train_test():
             display(log_file, 'epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f \n' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
             
             # save the model until the next improvement
-            if epoch % 2 == 0:
+            if epoch % args.epoch_save == 0:
                 torch.save(model.state_dict(), os.path.join('checkpoint', 'CDCN_epoch_%d.pkl' % (epoch + 1)))
 
 
@@ -205,7 +203,7 @@ def test_model(model, optimizer, info_list, image_dir, depth_map_dir, bbox_dir, 
 def display(log_file, msg):
     print(msg)
     log_file.write(msg + '\n')
-
+    log_file.flush()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="save quality using landmarkpose model")
@@ -214,7 +212,7 @@ if __name__ == "__main__":
     parser.add_argument('--batchsize', type=int, default=24, help='initial batchsize')  
     parser.add_argument('--step_size', type=int, default=500, help='how many epochs lr decays once')  # 500 
     parser.add_argument('--gamma', type=float, default=0.5, help='gamma of optim.lr_scheduler.StepLR, decay of lr')
-    parser.add_argument('--echo_batches', type=int, default=1, help='how many batches display once')  # 50
+    parser.add_argument('--echo_batches', type=int, default=40, help='how many batches display once')  # 50
     parser.add_argument('--epochs', type=int, default=3000, help='total training epochs')
     parser.add_argument('--log', type=str, default="CDCN_log", help='log and save model name')
     parser.add_argument('--finetune', action='store_true', default=False, help='whether finetune other models')

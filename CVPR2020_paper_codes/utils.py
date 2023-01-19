@@ -26,7 +26,8 @@ import sklearn
 from sklearn import metrics
 from sklearn.metrics import roc_curve, auc
 import pdb
-
+import matplotlib.pyplot as plt
+from torchvision import transforms as transforms
 class AvgrageMeter(object):
 
   def __init__(self):
@@ -476,11 +477,11 @@ def create_exp_dir(path, scripts_to_save=None):
       shutil.copyfile(script, dst_file)
 
 # feature  -->   [ batch, channel, height, width ]
-def plot_save_heatmap(heatmap, out_dir, name):
-    heatmap = heatmap.data.numpy()
+def plot_save_jpg(x, out_dir, name):
+    x = x.data.numpy()
     fig = plt.figure() 
     ax = fig.add_subplot(111)
-    plt.imshow(heatmap)
+    plt.imshow(x)
     plt.colorbar()
     plt.savefig(os.path.join(out_dir, name + '.jpg'))
     plt.close()
@@ -488,9 +489,9 @@ def plot_save_heatmap(heatmap, out_dir, name):
 def cal_heatmap(x):
     channels, height, width = 0, 0, 0
     
-    if x.shape() == 3:
+    if len(x.shape) == 3:
         channels, height, width = x.shape
-    elif x.shape() == 2:
+    elif len(x.shape) == 2:
         height, width = x.shape
 
     heatmap = torch.zeros(height, width)
@@ -498,7 +499,7 @@ def cal_heatmap(x):
         for i in range(channels):
             heatmap += torch.pow(x[i,:,:],2).view(height,width)
     else:
-        heatmap += torch.pow(feature_first_frame[i,:,:],2).view(height,width)
+        heatmap += torch.pow(x,2).view(height,width)
     
     return heatmap
 
@@ -510,27 +511,28 @@ def tensorboard_add_image_sample(writer, image, predict, identifier, sample_fact
         writer.add_image(' mini_batch: ' + i + ' predict',  make_grid(predict), epoch)
 
 
-def feature_2_heat_map(x, feature1, feature2, feature3, map_x, epoch, mini_epoch):
-    out_dir = os.path.join(args.log, str(epoch) + '_' + str(mini_epoch))
+def feature_2_heat_map(log_dir, x, feature1, feature2, feature3, map_x, epoch, mini_epoch):
+    out_dir = os.path.join(log_dir, 'heatmap',  'epoch_' + str(epoch) + '_mini_epoch_' + str(mini_epoch))
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
-
     # original image
-    heapmap = cal_heatmap(x[0,:,:,:].cpu())
-    plot_save_heatmap(heatmap, out_dir, 'visual')
+    heatmap = cal_heatmap(x[0,:,:,:].cpu())
+    plot_save_jpg(heatmap, out_dir, 'visual')
+    plot_save_jpg(x[0,:,:,:].permute((1, 2, 0)).cpu(), out_dir, 'origin_visual')
 
     ## first feature
-    heapmap = cal_heatmap(feature1[0,:,:,:].cpu())
-    plot_save_heatmap(heatmap, out_dir, 'x_Block1_visual')
-    
+    heatmap = cal_heatmap(feature1[0,:,:,:].cpu())
+    plot_save_jpg(heatmap, out_dir, 'x_Block1_visual')
+
     ## second feature
-    heapmap = cal_heatmap(feature2[0,:,:,:].cpu())
-    plot_save_heatmap(heatmap, out_dir, 'x_Block2_visual')
+    heatmap = cal_heatmap(feature2[0,:,:,:].cpu())
+    plot_save_jpg(heatmap, out_dir, 'x_Block2_visual')
 
     ## third feature
-    heapmap = cal_heatmap(feature3[0,:,:,:].cpu())
-    plot_save_heatmap(heatmap, out_dir, 'x_Block3_visual')
-    
+    heatmap = cal_heatmap(feature3[0,:,:,:].cpu())
+    plot_save_jpg(heatmap, out_dir, 'x_Block3_visual')
+
     ## depth map
     heatmap = cal_heatmap(map_x[0,:,:].cpu())    ## the middle frame 
-    plot_save_heatmap(heatmap, out_dir, 'x_DepthMap_visual')
+    plot_save_jpg(heatmap, out_dir, 'x_DepthMap_visual')
+    plot_save_jpg(map_x[0,:,:].cpu(), out_dir, 'origin_x_DepthMap_visual')

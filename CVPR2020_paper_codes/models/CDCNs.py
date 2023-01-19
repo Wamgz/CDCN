@@ -281,8 +281,6 @@ class CDCNpp(nn.Module):
         
         x_concat = torch.cat((x_Block1_32x32,x_Block2_32x32,x_Block3_32x32), dim=1)    
         
-        #pdb.set_trace()
-        
         map_x = self.lastconv1(x_concat)
         
         map_x = map_x.squeeze(1)

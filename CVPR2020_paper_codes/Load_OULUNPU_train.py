@@ -229,7 +229,6 @@ class Spoofing_train(Dataset):
             spoofing_label = 0
             map_x = np.zeros((32, 32))    # fake
 
-        
         sample = {'image_x': image_x, 'map_x': map_x, 'spoofing_label': spoofing_label}
         if self.transform:
             sample = self.transform(sample)
