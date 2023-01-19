@@ -101,92 +101,87 @@ class ToTensor_valtest(object):
         return {'image_x': torch.from_numpy(image_x.astype(np.float)).float(), 'val_map_x': torch.from_numpy(val_map_x.astype(np.float)).float(),'spoofing_label': torch.from_numpy(spoofing_label_np.astype(np.long)).long()} 
 
 
-# /home/ztyu/FAS_dataset/OULU/Train_images/          6_3_20_5_121_scene.jpg        6_3_20_5_121_scene.dat
-# /home/ztyu/FAS_dataset/OULU/IJCB_re/OULUtrain_images/        6_3_20_5_121_depth1D.jpg
+# jpg_dir_path: /root/autodl-tmp/oulu_depth/Dev_jpgs/6_3_22_4
+# map_dir_path: /root/autodl-tmp/oulu_depth/Dev_depth/6_3_22_4
+# bbox_dir_path: /root/autodl-tmp/oulu_depth/Dev_bbox/6_3_22_4
 class Spoofing_valtest(Dataset):
 
-    def __init__(self, info_list, root_dir, val_map_dir,  transform=None):
+    def __init__(self, info_list, jpgs_dir, depth_maps_dir, bboxes_dir, transform=None):
 
         self.landmarks_frame = pd.read_csv(info_list, delimiter=',', header=None)
-        self.root_dir = root_dir
-        self.val_map_dir = val_map_dir
+        self.jpgs_dir = jpgs_dir
+        self.depth_maps_dir = depth_maps_dir
+        self.bboxes_dir = bboxes_dir
         self.transform = transform
 
     def __len__(self):
         return len(self.landmarks_frame)
 
-    
     def __getitem__(self, idx):
-        #print(self.landmarks_frame.iloc[idx, 0])
-        videoname = str(self.landmarks_frame.iloc[idx, 1])
-        image_path = os.path.join(self.root_dir, videoname)
-        val_map_path = os.path.join(self.val_map_dir, videoname)
+        video_name = str(self.landmarks_frame.iloc[idx, 1])
+        jpgs_path = os.path.join(self.jpgs_dir, video_name)
+        depth_maps_path = os.path.join(self.depth_maps_dir, video_name)
+        bboxs_path = os.path.join(self.bboxes_dir, video_name)
              
-        image_x, val_map_x = self.get_single_image_x(image_path, val_map_path, videoname)
-		    
+        image_x, map_x = self.get_single_image_x(jpgs_path, depth_maps_path, bboxs_path, video_name)
+
         spoofing_label = self.landmarks_frame.iloc[idx, 0]
         if spoofing_label == 1:
             spoofing_label = 1            # real
         else:
             spoofing_label = 0
-            
-        sample = {'image_x': image_x, 'val_map_x':val_map_x , 'spoofing_label': spoofing_label}
 
+        sample = {'image_x': image_x, 'val_map_x': map_x, 'spoofing_label': spoofing_label}
         if self.transform:
             sample = self.transform(sample)
         return sample
 
-    def get_single_image_x(self, image_path, val_map_path, videoname):
-
-        files_total = len([name for name in os.listdir(image_path) if os.path.isfile(os.path.join(image_path, name))])//3
+    def get_single_image_x(self, jpg_dir_path, map_dir_path, bbox_dir_path, videoname):
+        files_total = len([name for name in os.listdir(jpg_dir_path) if os.path.isfile(os.path.join(jpg_dir_path, name))])//3
         interval = files_total//10
         
         image_x = np.zeros((frames_total, 256, 256, 3))
         val_map_x = np.ones((frames_total, 32, 32))
         
         # random choose 1 frame
-        for ii in range(frames_total):
-            image_id = ii*interval + 1 
-            
+        image_name = ''
+        for i in range(frames_total):
+            image_id = i*interval + 1 
+            flag = False
             for temp in range(50):
-                s = "_%03d_scene" % image_id
-                s1 = "_%03d_depth1D" % image_id
-                image_name = videoname + s + '.jpg'
-                map_name = videoname + s1 + '.jpg'
-                bbox_name = videoname + s + '.dat'
-                bbox_path = os.path.join(image_path, bbox_name)
-                val_map_path2 = os.path.join(val_map_path, map_name)
-                val_map_x_temp2 = cv2.imread(val_map_path2, 0)
-            
-                if os.path.exists(bbox_path) & os.path.exists(val_map_path2)  :    # some scene.dat are missing
-                    if val_map_x_temp2 is not None:
+                image_name = "{:03}".format(image_id)
+                bbox_path = os.path.join(bbox_dir_path, str(image_name)+'.dat')
+                depth_map_path = os.path.join(map_dir_path, str(image_name)+'.jpg')
+                
+                if os.path.exists(bbox_path) and os.path.exists(depth_map_path)  :    # some scene.dat are missing
+                    depth_map_jpg = cv2.imread(depth_map_path, 0)
+                    if depth_map_jpg is not None:
                         break
                     else:
                         image_id +=1
                 else:
                     image_id +=1
-                    
+        
             # RGB
-            image_path2 = os.path.join(image_path, image_name)
-            image_x_temp = cv2.imread(image_path2)
-            
-            
+            jpg_path = os.path.join(jpg_dir_path, image_name + '.jpg')
+            jpg_image = cv2.imread(jpg_path)
             
             # gray-map
-            val_map_x_temp = cv2.imread(val_map_path2, 0)
+            depth_map_path = os.path.join(map_dir_path, image_name + '.jpg')
+            depth_map_image = cv2.imread(depth_map_path, 0)
 
-            image_x[ii,:,:,:] = cv2.resize(crop_face_from_scene(image_x_temp, bbox_path, face_scale), (256, 256))
+            image_x[i,:,:,:] = cv2.resize(crop_face_from_scene(jpg_image, bbox_path, face_scale), (256, 256))
             # transform to binary mask --> threshold = 0 
-            temp = cv2.resize(crop_face_from_scene(val_map_x_temp, bbox_path, face_scale), (32, 32))
-            np.where(temp < 1, temp, 1)
-            val_map_x[ii,:,:] = temp
+            depth_image_cropped = cv2.resize(crop_face_from_scene(depth_map_image, bbox_path, face_scale), (32, 32))
+            
+            np.where(depth_image_cropped < 1, depth_image_cropped, 1)
+            val_map_x[i,:,:] = depth_image_cropped
             
 			
         return image_x, val_map_x
 
+if __name__ == '__main__':
+    path = '/root/autodl-tmp/oulu_depth/Dev_depth/3_2_24_5/065.jpg'
+    print(os.path.exists(path))
 
-
-            
- 
-
-
+        

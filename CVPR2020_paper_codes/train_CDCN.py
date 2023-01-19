@@ -25,15 +25,16 @@ import cv2
 import numpy as np
 import random
 import math
+import time
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-
+from torch.utils.tensorboard import SummaryWriter
 
 from models.CDCNs import Conv2d_cd, CDCN, CDCNpp
 
 from Load_OULUNPU_train import Spoofing_train, Normaliztion, ToTensor, RandomHorizontalFlip, Cutout, RandomErasing
 from Load_OULUNPU_valtest import Spoofing_valtest, Normaliztion_valtest, ToTensor_valtest
-
+from data_fetchers import DataFetcher
 
 import torch.nn.functional as F
 from torch.autograd import Variable
@@ -41,403 +42,184 @@ import torch.nn as nn
 import torch.optim as optim
 import copy
 import pdb
-
-from utils import AvgrageMeter, accuracy, performances
-
-
-
-# Dataset root
-train_image_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/Train_images/'        
-val_image_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/Dev_images/'     
-test_image_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/Test_images/'   
-   
-map_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/IJCB_re/OULUtrain_images/'   
-val_map_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/IJCB_re/OULUdev_images/' 
-test_map_dir = '/wrk/yuzitong/DONOTREMOVE/OULU/IJCB_re/OULUtest_images/' 
-
-train_list = '/wrk/yuzitong/DONOTREMOVE/OULU/OULU_Protocols/Protocol_1/Train.txt'
-val_list = '/wrk/yuzitong/DONOTREMOVE/OULU/OULU_Protocols/Protocol_1/Dev.txt'
-test_list =  '/wrk/yuzitong/DONOTREMOVE/OULU/OULU_Protocols/Protocol_1/Test.txt'
- 
+from torchvision.utils import make_grid
+from utils import AvgrageMeter, accuracy, performances, plot_save_heatmap, cal_heatmap, tensorboard_add_image_sample, feature_2_heat_map
+from loss import contrast_depth_loss
 
 
+# jpg路径
+train_image_dir = '/root/autodl-tmp/oulu_depth/Train_jpgs/'        
+val_image_dir = '/root/autodl-tmp/oulu_depth/Dev_jpgs/' 
+test_image_dir = '/root/autodl-tmp/oulu_depth/Test_jpgs/'    
 
-# feature  -->   [ batch, channel, height, width ]
-def FeatureMap2Heatmap( x, feature1, feature2, feature3, map_x):
-    ## initial images 
-    feature_first_frame = x[0,:,:,:].cpu()    ## the middle frame 
+# depth map路径
+train_depth_map_dir = '/root/autodl-tmp/oulu_depth/Train_depth/'   
+val_depth_map_dir = '/root/autodl-tmp/oulu_depth/Dev_depth/'    
+test_depth_map_dir = '/root/autodl-tmp/oulu_depth/Test_depth/'
 
-    heatmap = torch.zeros(feature_first_frame.size(1), feature_first_frame.size(2))
-    for i in range(feature_first_frame.size(0)):
-        heatmap += torch.pow(feature_first_frame[i,:,:],2).view(feature_first_frame.size(1),feature_first_frame.size(2))
+# bounding box路径
+train_bbox_dir = '/root/autodl-tmp/oulu_depth/Train_bbox/'   
+val_bbox_dir = '/root/autodl-tmp/oulu_depth/Dev_bbox/'    
+test_bbox_dir = '/root/autodl-tmp/oulu_depth/Test_bbox/'
 
-    heatmap = heatmap.data.numpy()
-    
-    fig = plt.figure() 
-    ax = fig.add_subplot(111)
-    plt.imshow(heatmap)
-    plt.colorbar()
-    plt.savefig(args.log+'/'+args.log + '_x_visual.jpg')
-    plt.close()
+train_list = '/root/autodl-tmp/oulu/Protocols/Protocol_1/Train.txt'
+val_list = '/root/autodl-tmp/oulu/Protocols/Protocol_1/Dev.txt'
+test_list =  '/root/autodl-tmp/oulu/Protocols/Protocol_1/Test.txt'
 
-
-    ## first feature
-    feature_first_frame = feature1[0,:,:,:].cpu()    ## the middle frame 
-    heatmap = torch.zeros(feature_first_frame.size(1), feature_first_frame.size(2))
-    for i in range(feature_first_frame.size(0)):
-        heatmap += torch.pow(feature_first_frame[i,:,:],2).view(feature_first_frame.size(1),feature_first_frame.size(2))
-
-    heatmap = heatmap.data.numpy()
-    
-    fig = plt.figure() 
-    ax = fig.add_subplot(111)
-    plt.imshow(heatmap)
-    plt.colorbar()
-    plt.savefig(args.log+'/'+args.log + '_x_Block1_visual.jpg')
-    plt.close()
-    
-    ## second feature
-    feature_first_frame = feature2[0,:,:,:].cpu()    ## the middle frame 
-    heatmap = torch.zeros(feature_first_frame.size(1), feature_first_frame.size(2))
-    for i in range(feature_first_frame.size(0)):
-        heatmap += torch.pow(feature_first_frame[i,:,:],2).view(feature_first_frame.size(1),feature_first_frame.size(2))
-
-    heatmap = heatmap.data.numpy()
-    
-    fig = plt.figure() 
-    ax = fig.add_subplot(111)
-    plt.imshow(heatmap)
-    plt.colorbar()
-    plt.savefig(args.log+'/'+args.log + '_x_Block2_visual.jpg')
-    plt.close()
-    
-    ## third feature
-    feature_first_frame = feature3[0,:,:,:].cpu()    ## the middle frame 
-    heatmap = torch.zeros(feature_first_frame.size(1), feature_first_frame.size(2))
-    for i in range(feature_first_frame.size(0)):
-        heatmap += torch.pow(feature_first_frame[i,:,:],2).view(feature_first_frame.size(1),feature_first_frame.size(2))
-
-    heatmap = heatmap.data.numpy()
-    
-    fig = plt.figure() 
-    ax = fig.add_subplot(111)
-    plt.imshow(heatmap)
-    plt.colorbar()
-    plt.savefig(args.log+'/'+args.log + '_x_Block3_visual.jpg')
-    plt.close()
-    
-    ## third feature
-    heatmap2 = torch.pow(map_x[0,:,:],2)    ## the middle frame 
-
-    heatmap2 = heatmap2.data.cpu().numpy()
-    
-    fig = plt.figure() 
-    ax = fig.add_subplot(111)
-    plt.imshow(heatmap2)
-    plt.colorbar()
-    plt.savefig(args.log+'/'+args.log + '_x_DepthMap_visual.jpg')
-    plt.close()
-    
-
-
-
-
-
-
-def contrast_depth_conv(input):
-    ''' compute contrast depth in both of (out, label) '''
-    '''
-        input  32x32
-        output 8x32x32
-    '''
-    
-
-    kernel_filter_list =[
-                        [[1,0,0],[0,-1,0],[0,0,0]], [[0,1,0],[0,-1,0],[0,0,0]], [[0,0,1],[0,-1,0],[0,0,0]],
-                        [[0,0,0],[1,-1,0],[0,0,0]], [[0,0,0],[0,-1,1],[0,0,0]],
-                        [[0,0,0],[0,-1,0],[1,0,0]], [[0,0,0],[0,-1,0],[0,1,0]], [[0,0,0],[0,-1,0],[0,0,1]]
-                        ]
-    
-    kernel_filter = np.array(kernel_filter_list, np.float32)
-    
-    kernel_filter = torch.from_numpy(kernel_filter.astype(np.float)).float().cuda()
-    # weights (in_channel, out_channel, kernel, kernel)
-    kernel_filter = kernel_filter.unsqueeze(dim=1)
-    
-    input = input.unsqueeze(dim=1).expand(input.shape[0], 8, input.shape[1],input.shape[2])
-    
-    contrast_depth = F.conv2d(input, weight=kernel_filter, groups=8)  # depthwise conv
-    
-    return contrast_depth
-
-
-class Contrast_depth_loss(nn.Module):    # Pearson range [-1, 1] so if < 0, abs|loss| ; if >0, 1- loss
-    def __init__(self):
-        super(Contrast_depth_loss,self).__init__()
-        return
-    def forward(self, out, label): 
-        '''
-        compute contrast depth in both of (out, label),
-        then get the loss of them
-        tf.atrous_convd match tf-versions: 1.4
-        '''
-        contrast_out = contrast_depth_conv(out)
-        contrast_label = contrast_depth_conv(label)
-        
-        
-        criterion_MSE = nn.MSELoss().cuda()
-    
-        loss = criterion_MSE(contrast_out, contrast_label)
-        #loss = torch.pow(contrast_out - contrast_label, 2)
-        #loss = torch.mean(loss)
-    
-        return loss
-
-
-
+writer = SummaryWriter('/root/tf-logs')
 
 # main function
 def train_test():
-    # GPU  & log file  -->   if use DataParallel, please comment this command
     #os.environ["CUDA_VISIBLE_DEVICES"] = "%d" % (args.gpu)
-
-    isExists = os.path.exists(args.log)
-    if not isExists:
-        os.makedirs(args.log)
-    log_file = open(args.log+'/'+ args.log+'_log_P1.txt', 'w')
+    now = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    log_dir = os.path.join(args.log, now)
+    if not os.path.exists(os.path.join(args.log, now)):
+        os.makedirs(log_dir)
+    
+    log_file = open(os.path.join(log_dir, 'log.txt'), 'w')
     
     echo_batches = args.echo_batches
-
-    print("Oulu-NPU, P1:\n ")
-
-    log_file.write('Oulu-NPU, P1:\n ')
-    log_file.flush()
+    display(log_file, "Oulu-NPU start train & test at %s" % now)
 
     # load the network, load the pre-trained model in UCF101?
-    finetune = args.finetune
-    if finetune==True:
-        print('finetune!\n')
-        log_file.write('finetune!\n')
-        log_file.flush()
-            
+    if args.finetune:
+        display(log_file, 'finetune!\n')
         model = CDCN()
-        #model = model.cuda()
-        model = model.to(device[0])
-        model = nn.DataParallel(model, device_ids=device, output_device=device[0])
-        model.load_state_dict(torch.load('xxx.pkl'))
-
-        lr = args.lr
-        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=0.00005)
-        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
-        
-
-    else:
-        print('train from scratch!\n')
-        log_file.write('train from scratch!\n')
-        log_file.flush()
-
-
-        
-        #model = CDCN(basic_conv=Conv2d_cd, theta=0.7)
-	model = CDCNpp(basic_conv=Conv2d_cd, theta=0.7)
-        
-
-
         model = model.cuda()
-        #model = model.to(device[0])
-        #model = nn.DataParallel(model, device_ids=device, output_device=device[0])
+        model.load_state_dict(torch.load('xxx.pkl'))
+    else:
+        display(log_file, 'train from scratch!\n')
+        model = CDCNpp(basic_conv=Conv2d_cd, theta=0.7)
+        model = model.cuda()
 
-        lr = args.lr
-        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=0.00005)
-        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)
-    
-    print(model) 
-    
-    
+
+    ## 初始化模型所需工具
+    lr = args.lr
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=0.00005)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.gamma)    
     criterion_absolute_loss = nn.MSELoss().cuda()
-    criterion_contrastive_loss = Contrast_depth_loss().cuda() 
-    
+    criterion_contrastive_loss = contrast_depth_loss().cuda() 
 
+    # load random 24-frame clip data every epoch
+    train_data = Spoofing_train(info_list=train_list, jpgs_dir=train_image_dir, depth_maps_dir=train_depth_map_dir, bboxes_dir=train_bbox_dir, transform=transforms.Compose([RandomErasing(), RandomHorizontalFlip(),  ToTensor(), Cutout(), Normaliztion()]))
+    dataloader_train = DataLoader(train_data, batch_size=args.batchsize, shuffle=True, num_workers=16, pin_memory=True)
+    if torch.cuda.is_available():
+        dataloader_train = DataFetcher(dataloader_train)
 
-    #bandpass_filter_numpy = build_bandpass_filter_numpy(30, 30)  # fs, order  # 61, 64 
-
-    ACER_save = 1.0
-    
+    loss_factor = 1000
     for epoch in range(args.epochs):  # loop over the dataset multiple times
         scheduler.step()
         if (epoch + 1) % args.step_size == 0:
             lr *= args.gamma
+        loss_absolute, loss_contra = AvgrageMeter(), AvgrageMeter()
 
-        
-        loss_absolute = AvgrageMeter()
-        loss_contra =  AvgrageMeter()
-        #top5 = utils.AvgrageMeter()
-        
-        
-        ###########################################
-        '''                train             '''
-        ###########################################
         model.train()
-        
-        # load random 16-frame clip data every epoch
-        train_data = Spoofing_train(train_list, train_image_dir, map_dir, transform=transforms.Compose([RandomErasing(), RandomHorizontalFlip(),  ToTensor(), Cutout(), Normaliztion()]))
-        dataloader_train = DataLoader(train_data, batch_size=args.batchsize, shuffle=True, num_workers=4)
-
         for i, sample_batched in enumerate(dataloader_train):
-            # get the inputs
+            # get the inputs(batch_size, 3, 256, 256)
             inputs, map_label, spoof_label = sample_batched['image_x'].cuda(), sample_batched['map_x'].cuda(), sample_batched['spoofing_label'].cuda() 
-
+            
             optimizer.zero_grad()
-            
-            #pdb.set_trace()
-            
-            # forward + backward + optimize
-            map_x, embedding, x_Block1, x_Block2, x_Block3, x_input =  model(inputs)
-           
-            
-            absolute_loss = criterion_absolute_loss(map_x, map_label)
-            contrastive_loss = criterion_contrastive_loss(map_x, map_label)
-            
+
+            map_x, embedding, x_Block1, x_Block2, x_Block3, x_input = model(inputs)
+
+            absolute_loss = loss_factor * criterion_absolute_loss(map_x, map_label)
+            contrastive_loss = loss_factor * criterion_contrastive_loss(map_x, map_label)
             loss =  absolute_loss + contrastive_loss
-            #loss =  absolute_loss 
-             
+
             loss.backward()
-            
             optimizer.step()
-            
+
             n = inputs.size(0)
             loss_absolute.update(absolute_loss.data, n)
             loss_contra.update(contrastive_loss.data, n)
-        
-
-            if i % echo_batches == echo_batches-1:    # print every 50 mini-batches
-                
-                # visualization
-                FeatureMap2Heatmap(x_input, x_Block1, x_Block2, x_Block3, map_x)
-
-                # log written
-                print('epoch:%d, mini-batch:%3d, lr=%f, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f' % (epoch + 1, i + 1, lr,  loss_absolute.avg, loss_contra.avg))
-                #log_file.write('epoch:%d, mini-batch:%3d, lr=%f, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f \n' % (epoch + 1, i + 1, lr, loss_absolute.avg, loss_contra.avg))
-                #log_file.flush()
-                
-            #break
-        
-        # whole epoch average
-        print('epoch:%d, Train:  Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f\n' % (epoch + 1, loss_absolute.avg, loss_contra.avg))
-        log_file.write('epoch:%d, Train: Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f \n' % (epoch + 1, loss_absolute.avg, loss_contra.avg))
-        log_file.flush()
-           
-    
-                    
-        #### validation/test
-        if epoch <300:
-             epoch_test = 300   
-        else:
-            epoch_test = 20   
-        #epoch_test = 1
-        if epoch % epoch_test == epoch_test-1:    # test every 5 epochs  
-            model.eval()
             
-            with torch.no_grad():
-                ###########################################
-                '''                val             '''
-                ###########################################
-                # val for threshold
-                val_data = Spoofing_valtest(val_list, val_image_dir, val_map_dir, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
-                dataloader_val = DataLoader(val_data, batch_size=1, shuffle=False, num_workers=4)
-                
-                map_score_list = []
-                
-                for i, sample_batched in enumerate(dataloader_val):
-                    # get the inputs
-                    inputs, spoof_label = sample_batched['image_x'].cuda(), sample_batched['spoofing_label'].cuda()
-                    val_maps = sample_batched['val_map_x'].cuda()   # binary map from PRNet
+            if (i + 1) % echo_batches == 0:
+                display(log_file, 'epoch:%d, batch:%d, Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f\n' % (epoch + 1, i + 1, loss_absolute.avg, loss_contra.avg))
+                feature_2_heat_map(x_input, x_Block1, x_Block2, x_Block3, map_x, epoch, i)
+        writer.add_scalar('data/absolute_loss', loss_absolute.avg, epoch)
+        writer.add_scalar('data/contrastive_loss', loss_contra.avg, epoch)
+        writer.add_scalar('data/total_loss', loss_absolute.avg + loss_contra.avg , epoch)
+        # whole epoch average
+        display(log_file, 'epoch:%d, Train:  Absolute_Depth_loss= %.4f, Contrastive_Depth_loss= %.4f\n' % (epoch + 1, loss_absolute.avg, loss_contra.avg))
+
+        if (epoch + 1) % args.epoch_save == 0:  # save every 5 epochs
+            torch.save(model.state_dict(), os.path.join(log_dir, 'epoch%d.pkl' % (epoch + 1)))
+            display(log_file, 'save model at epoch: %d' % (epoch + 1))
         
-                    optimizer.zero_grad()
-                    
-                    #pdb.set_trace()
-                    map_score = 0.0
-                    for frame_t in range(inputs.shape[1]):
-                        map_x, embedding, x_Block1, x_Block2, x_Block3, x_input =  model(inputs[:,frame_t,:,:,:])
-                        
-                        score_norm = torch.sum(map_x)/torch.sum(val_maps[:,frame_t,:,:])
-                        map_score += score_norm
-                    map_score = map_score/inputs.shape[1]
-                        
-                    map_score_list.append('{} {}\n'.format(map_score, spoof_label[0][0]))
-                    #pdb.set_trace()
-                map_score_val_filename = args.log+'/'+ args.log+'_map_score_val.txt'
-                with open(map_score_val_filename, 'w') as file:
-                    file.writelines(map_score_list)                
-                
-                ###########################################
-                '''                test             '''
-                ##########################################
-                # test for ACC
-                test_data = Spoofing_valtest(test_list, test_image_dir, test_map_dir, transform=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
-                dataloader_test = DataLoader(test_data, batch_size=1, shuffle=False, num_workers=4)
-                
-                map_score_list = []
-                
-                for i, sample_batched in enumerate(dataloader_test):
-                    # get the inputs
-                    inputs, spoof_label = sample_batched['image_x'].cuda(), sample_batched['spoofing_label'].cuda()
-                    test_maps = sample_batched['val_map_x'].cuda()   # binary map from PRNet 
-        
-                    optimizer.zero_grad()
-                    
-                    #pdb.set_trace()
-                    map_score = 0.0
-                    for frame_t in range(inputs.shape[1]):
-                        map_x, embedding, x_Block1, x_Block2, x_Block3, x_input =  model(inputs[:,frame_t,:,:,:])
-                        
-                        score_norm = torch.sum(map_x)/torch.sum(test_maps[:,frame_t,:,:])
-                        map_score += score_norm
-                    map_score = map_score/inputs.shape[1]
-                        
-                    map_score_list.append('{} {}\n'.format(map_score, spoof_label[0][0]))
-                
-                map_score_test_filename = args.log+'/'+ args.log+'_map_score_test.txt'
-                with open(map_score_test_filename, 'w') as file:
-                    file.writelines(map_score_list)    
-                
-                #############################################################     
-                #       performance measurement both val and test
-                #############################################################     
-                val_threshold, test_threshold, val_ACC, val_ACER, test_ACC, test_APCER, test_BPCER, test_ACER, test_ACER_test_threshold = performances(map_score_val_filename, map_score_test_filename)
-                
-                print('epoch:%d, Val:  val_threshold= %.4f, val_ACC= %.4f, val_ACER= %.4f' % (epoch + 1, val_threshold, val_ACC, val_ACER))
-                log_file.write('\n epoch:%d, Val:  val_threshold= %.4f, val_ACC= %.4f, val_ACER= %.4f \n' % (epoch + 1, val_threshold, val_ACC, val_ACER))
-              
-                print('epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
-                #print('epoch:%d, Test:  test_threshold= %.4f, test_ACER_test_threshold= %.4f\n' % (epoch + 1, test_threshold, test_ACER_test_threshold))
-                log_file.write('epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f \n' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
-                #log_file.write('epoch:%d, Test:  test_threshold= %.4f, test_ACER_test_threshold= %.4f \n\n' % (epoch + 1, test_threshold, test_ACER_test_threshold))
-                log_file.flush()
-                
-        #if epoch <1:    
-        # save the model until the next improvement     
-        #    torch.save(model.state_dict(), args.log+'/'+args.log+'_%d.pkl' % (epoch + 1))
+        if (epoch + 1) % args.epoch_test == 0:    # test every 5 epochs  
+            val_map_score_list = test_model(model=model, optimizer=optimizer, info_list=val_list, image_dir=val_image_dir, depth_map_dir=val_depth_map_dir, bbox_dir=val_bbox_dir, transforms=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
+            test_map_score_list = test_model(model=model, optimizer=optimizer, info_list=test_list, image_dir=test_image_dir, depth_map_dir=test_depth_map_dir, bbox_dir=test_bbox_dir, transforms=transforms.Compose([Normaliztion_valtest(), ToTensor_valtest()]))
+            
+            #############################################################     
+            #       performance measurement both val and test
+            #############################################################     
+            val_threshold, test_threshold, val_ACC, val_ACER, test_ACC, test_APCER, test_BPCER, test_ACER, test_ACER_test_threshold = performances(val_map_score_list, test_map_score_list)
+            writer.add_scalar('data/val_acc', val_ACC, epoch)
+            writer.add_scalar('data/val_acer', val_ACER, epoch)
+            writer.add_scalar('data/test_acc', test_ACC, epoch)
+            writer.add_scalar('data/test_apcer', test_APCER, epoch)
+            writer.add_scalar('data/test_bpcer', test_BPCER, epoch)
+            writer.add_scalar('data/test_acer', test_ACER, epoch)
+
+            display(log_file, 'epoch:%d, Val:  val_threshold= %.4f, val_ACC= %.4f, val_ACER= %.4f' % (epoch + 1, val_threshold, val_ACC, val_ACER))
+            display(log_file, 'epoch:%d, Test:  ACC= %.4f, APCER= %.4f, BPCER= %.4f, ACER= %.4f \n' % (epoch + 1, test_ACC, test_APCER, test_BPCER, test_ACER))
+            
+            # save the model until the next improvement
+            if epoch % 2 == 0:
+                torch.save(model.state_dict(), os.path.join('checkpoint', 'CDCN_epoch_%d.pkl' % (epoch + 1)))
 
 
-    print('Finished Training')
+    display(log_file, 'Finished Training')
     log_file.close()
-  
 
-  
- 
+###########################################
+'''            val     test        '''
+###########################################
+def test_model(model, optimizer, info_list, image_dir, depth_map_dir, bbox_dir, transforms=None):
+    map_score_list = []
+
+    model.eval()
+    with torch.no_grad():
+        # val for threshold
+        data = Spoofing_valtest(info_list, image_dir, depth_map_dir, bbox_dir, transforms)
+        dataloader = DataLoader(data, batch_size=1, shuffle=False, num_workers=16)
+        
+        for i, sample_batched in enumerate(dataloader):
+            # get the inputs (1, frames, 3, 256, 256)
+            inputs, spoof_label = sample_batched['image_x'].cuda(), sample_batched['spoofing_label'].cuda()
+            val_maps = sample_batched['val_map_x'].cuda()   # binary map from PRNet
+
+            optimizer.zero_grad()
+            
+            map_score = torch.tensor(0.0).cuda()
+            for frame_t in range(inputs.shape[1]):
+                map_x, embedding, x_Block1, x_Block2, x_Block3, x_input =  model(inputs[:,frame_t,:,:,:])
+                
+                score_norm = torch.sum(map_x)/torch.sum(val_maps[:,frame_t,:,:])
+                map_score += score_norm
+            map_score = map_score/inputs.shape[1]
+            map_score_list.append((map_score, spoof_label[0][0]))
+
+    return map_score_list
+
+def display(log_file, msg):
+    print(msg)
+    log_file.write(msg + '\n')
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="save quality using landmarkpose model")
-    parser.add_argument('--gpu', type=int, default=3, help='the gpu id used for predict')
+    parser.add_argument('--gpu', type=int, default=0, help='the gpu id used for predict')
     parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate')  
-    parser.add_argument('--batchsize', type=int, default=7, help='initial batchsize')  
+    parser.add_argument('--batchsize', type=int, default=24, help='initial batchsize')  
     parser.add_argument('--step_size', type=int, default=500, help='how many epochs lr decays once')  # 500 
     parser.add_argument('--gamma', type=float, default=0.5, help='gamma of optim.lr_scheduler.StepLR, decay of lr')
-    parser.add_argument('--echo_batches', type=int, default=50, help='how many batches display once')  # 50
-    parser.add_argument('--epochs', type=int, default=1400, help='total training epochs')
-    parser.add_argument('--log', type=str, default="CDCNpp_P1", help='log and save model name')
+    parser.add_argument('--echo_batches', type=int, default=1, help='how many batches display once')  # 50
+    parser.add_argument('--epochs', type=int, default=3000, help='total training epochs')
+    parser.add_argument('--log', type=str, default="CDCN_log", help='log and save model name')
     parser.add_argument('--finetune', action='store_true', default=False, help='whether finetune other models')
+    parser.add_argument('--epoch_test', type=int, default=20)
+    parser.add_argument('--epoch_save', type=int, default=50)
 
     args = parser.parse_args()
     train_test()

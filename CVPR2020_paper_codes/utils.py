@@ -169,22 +169,17 @@ def get_err_threhold(fpr, tpr, threshold):
 
 
 #def performances(dev_scores, dev_labels, test_scores, test_labels):
-def performances(map_score_val_filename, map_score_test_filename):
-
-    # val 
-    with open(map_score_val_filename, 'r') as file:
-        lines = file.readlines()
+def performances(map_score_val_list, map_score_test_list):
     val_scores = []
     val_labels = []
     data = []
     count = 0.0
     num_real = 0.0
     num_fake = 0.0
-    for line in lines:
+    for map_score in map_score_val_list:
         count += 1
-        tokens = line.split()
-        score = float(tokens[0])
-        label = float(tokens[1])  #label = int(tokens[1])
+        score = float(map_score[0])
+        label = float(map_score[1])  #label = int(tokens[1])
         val_scores.append(score)
         val_labels.append(label)
         data.append({'map_score': score, 'label': label})
@@ -207,19 +202,16 @@ def performances(map_score_val_filename, map_score_test_filename):
     
     
     # test 
-    with open(map_score_test_filename, 'r') as file2:
-        lines = file2.readlines()
     test_scores = []
     test_labels = []
     data = []
     count = 0.0
     num_real = 0.0
     num_fake = 0.0
-    for line in lines:
+    for map_score in map_score_test_list:
         count += 1
-        tokens = line.split()
-        score = float(tokens[0])
-        label = float(tokens[1])    #label = int(tokens[1])
+        score = float(map_score[0])
+        label = float(map_score[1])    #label = int(tokens[1])
         test_scores.append(score)
         test_labels.append(label)
         data.append({'map_score': score, 'label': label})
@@ -251,13 +243,6 @@ def performances(map_score_val_filename, map_score_test_filename):
     test_threshold_ACER = (test_threshold_APCER + test_threshold_BPCER) / 2.0
     
     return val_threshold, best_test_threshold, val_ACC, val_ACER, test_ACC, test_APCER, test_BPCER, test_ACER, test_threshold_ACER
-
-
-
-
-
-
-
 
 def performances_SiW_EER(map_score_val_filename):
 
@@ -490,3 +475,62 @@ def create_exp_dir(path, scripts_to_save=None):
       dst_file = os.path.join(path, 'scripts', os.path.basename(script))
       shutil.copyfile(script, dst_file)
 
+# feature  -->   [ batch, channel, height, width ]
+def plot_save_heatmap(heatmap, out_dir, name):
+    heatmap = heatmap.data.numpy()
+    fig = plt.figure() 
+    ax = fig.add_subplot(111)
+    plt.imshow(heatmap)
+    plt.colorbar()
+    plt.savefig(os.path.join(out_dir, name + '.jpg'))
+    plt.close()
+
+def cal_heatmap(x):
+    channels, height, width = 0, 0, 0
+    
+    if x.shape() == 3:
+        channels, height, width = x.shape
+    elif x.shape() == 2:
+        height, width = x.shape
+
+    heatmap = torch.zeros(height, width)
+    if channels > 0:
+        for i in range(channels):
+            heatmap += torch.pow(x[i,:,:],2).view(height,width)
+    else:
+        heatmap += torch.pow(feature_first_frame[i,:,:],2).view(height,width)
+    
+    return heatmap
+
+
+def tensorboard_add_image_sample(writer, image, predict, identifier, sample_factor):
+    rdn = np.random.randint(1, 1000)
+    if rdn == 1:
+        writer.add_image(' mini_batch: ' + i + ' image', make_grid(image), epoch)
+        writer.add_image(' mini_batch: ' + i + ' predict',  make_grid(predict), epoch)
+
+
+def feature_2_heat_map(x, feature1, feature2, feature3, map_x, epoch, mini_epoch):
+    out_dir = os.path.join(args.log, str(epoch) + '_' + str(mini_epoch))
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    # original image
+    heapmap = cal_heatmap(x[0,:,:,:].cpu())
+    plot_save_heatmap(heatmap, out_dir, 'visual')
+
+    ## first feature
+    heapmap = cal_heatmap(feature1[0,:,:,:].cpu())
+    plot_save_heatmap(heatmap, out_dir, 'x_Block1_visual')
+    
+    ## second feature
+    heapmap = cal_heatmap(feature2[0,:,:,:].cpu())
+    plot_save_heatmap(heatmap, out_dir, 'x_Block2_visual')
+
+    ## third feature
+    heapmap = cal_heatmap(feature3[0,:,:,:].cpu())
+    plot_save_heatmap(heatmap, out_dir, 'x_Block3_visual')
+    
+    ## depth map
+    heatmap = cal_heatmap(map_x[0,:,:].cpu())    ## the middle frame 
+    plot_save_heatmap(heatmap, out_dir, 'x_DepthMap_visual')
