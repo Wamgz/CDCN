@@ -1,3 +1,0 @@
-Oulu-NPU start train & test at 2023-01-20 00:02:25
-train from scratch!
-
